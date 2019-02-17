@@ -1,0 +1,15 @@
+#!/usr/bin/python
+
+import Adafruit_BBIO.GPIO as GPIO
+import time
+
+for i in range(4):
+    GPIO.setup("USR%d" % i, GPIO.OUT)
+
+
+for i in range(4):
+    GPIO.output("USR%d" % i, GPIO.HIGH)
+    time.sleep(1)
+for i in range(4):
+    GPIO.output("USR%d" % i, GPIO.LOW)
+    time.sleep(1)
