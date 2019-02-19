@@ -21,8 +21,8 @@ class Accelerometer_MMA8452():
     def get_uz(self):
         return self.aclmeter.readS8(ACLMTR_Z)
 
-acl = Accelerometer_MMA8452()
-
-print("X: {}".format(acl.get_ux()))
-print("Y: {}".format(acl.get_uy()))
-print("Z: {}".format(acl.get_uz()))
+    # Returns a tuple of three elements (x,y,z)
+    def get_ucoord(self):
+        return self.aclmeter.readS8(ACLMTR_X), \
+               self.aclmeter.readS8(ACLMTR_Y), \
+               self.aclmeter.readS8(ACLMTR_Z)
