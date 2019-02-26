@@ -13,6 +13,7 @@ class Accelerometer_MMA8452():
 
     def __init__(self, addr=ACLMTR_ADDR):
         self.aclmeter = I2C.get_i2c_device(addr)
+        self.aclmeter.write8(0x2a, 0x09)
 
     def get_ux(self):
         return self.aclmeter.readS8(ACLMTR_X)

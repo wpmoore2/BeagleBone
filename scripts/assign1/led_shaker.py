@@ -12,6 +12,17 @@ from MMA8452 import Accelerometer_MMA8452
 class LEDAPI():
 
     @staticmethod
+    def setup():
+        for i in range(4):
+            GPIO.setup("USR%d" % i, GPIO.OUT)
+
+    @staticmethod
+    def bb_led_flash(quad):
+        LEDAPI.bb_led_on(quad)
+        time.sleep(0.1)
+        LEDAPI.bb_led_off()
+
+    @staticmethod
     def bb_led_on(quad):
         for i in range(4):
             GPIO.output("USR%d" % i, quad[i])
@@ -30,13 +41,19 @@ class LEDAPI():
         return led_list
 
 
-class AirtextShaker():
 
+
+DEFAULT_SHAKE_TIMEOUT = 3
+ACCELEROMETER_READ_INTERVAL = 0.2
+DEFAULT_SHAKE_THRESHOLD = 5
+
+class AirtextShaker():
 
     def __init__(self):
         self.START = False
         self.start_lock = Lock()
         self.stop_thread = True
+        self.finterval = 0
 
     #
     #   Method for accelerometer thread
@@ -44,6 +61,8 @@ class AirtextShaker():
     def watch_accelerometer(self):
         acl = Accelerometer_MMA8452()
         xold, yold, zold = acl.get_ucoord()
+        num_shakes = 0
+        shake_timeout = DEFAULT_SHAKE_TIMEOUT
         while True:
 
             # Check to stop, and clean
@@ -54,34 +73,87 @@ class AirtextShaker():
                 exit(0)
 
 
-            time.sleep(0.2)
+            time.sleep(ACCELEROMETER_READ_INTERVAL)
             xnew, ynew, znew = acl.get_ucoord()
-            xd = abs(xnew - xold)
-            yd = abs(ynew - yold)
-            zd = abs(znew - zold)
+            xd = xnew - xold
+            yd = ynew - yold
+            zd = znew - zold
             xold, yold, zold = xnew, ynew, znew
 
-            if any(val > 100 for val in [xd, yd, zd]):
-                print ("X0: {} X1: {} diff: {}\nY0: {} Y1: {} diff: {}\nZ0: {} Z1: {}\n diff: {}\n".format(
-                        xold, xnew, xd, yold, ynew, yd, zold, znew, zd))
-                self.start_lock.acquire()
-                if self.START:
-                    self.START = False
+            if xnew > 0:
+                if xd > xnew:
+                    # xold must of been negative
+                    change_neg_2_pos_x = True
+                elif xd > 0:
+                    # xold positive but small than xnew
+                    speedup_pos_x = True
                 else:
-                    self.START = True
-                self.start_lock.release()
+                    # air text should always move, not speed up is slowdown
+                    speedup_pos_x = False
+            else:
+                if xd < xnew:
+                    # xold must of been positive
+                    change_pos_2_neg_x = True
+                if xd < 0:
+                    # xold is negative and smaller than xnew
+                    speedup_pos_x = True
+                else:
+                    speedup_pos_x = False
 
-                print ("Start condition: {}".format(self.START))
+            absxd = abs(xd)
+            factor = 0
+            if absxd > 5:
+                factor = 0.1
+            elif absxd > 10:
+                factor = 0.15
+            elif absxd > 20:
+                factor = 0.2
+            elif absxd > 40:
+                factor = 0.3
+
+
+            if speedup_pos_x:
+                # decrease interval, speedup flashes
+                self.finterval = self.finterval*(1.0 - (factor*0.5))
+            else:
+                # increase interval
+                self.finterval = self.finterval*(1.0 + factor)
+
+            print (self.finterval)
+            # print (xd)
+            # print (xnew)
+            # print ("\n\n")
+
+
+            # Keep track of multiple rigorous shakes to start/stop
+            shake_timeout -= ACCELEROMETER_READ_INTERVAL
+            if shake_timeout <= 0:
+                num_shakes = 0
+            # Check for start/stop from 3 shakes
+            if any(abs(val) > 150 for val in [xd, yd, zd]):
+                # print ("X0: {} X1: {} diff: {}\nY0: {} Y1: {} diff: {}\nZ0: {} Z1: {}\n diff: {}\n".format(
+                #         xold, xnew, xd, yold, ynew, yd, zold, znew, zd))
+                shake_timeout = DEFAULT_SHAKE_TIMEOUT
+                if num_shakes > DEFAULT_SHAKE_THRESHOLD:
+                    num_shakes = 0
+                    self.start_lock.acquire()
+                    if self.START:
+                        self.START = False
+                    else:
+                        self.START = True
+                        print ("Go")
+                    self.start_lock.release()
+                else:
+                    print ("shake: " + str(num_shakes))
+                    num_shakes += 1
 
     def stop_current_thread(self):
         self.stop_thread = True
 
-
     def start_airtext(self, text, interval):
 
         # Setup LEDs for output
-        for i in range(4):
-            GPIO.setup("USR%d" % i, GPIO.OUT)
+        LEDAPI.setup()
 
         # Determine how to spread led flashes based on string length and interval
         # Also serialize string in list of LED flashes - led_list
@@ -90,13 +162,15 @@ class AirtextShaker():
         led_list = LEDAPI.get_led_list(text)
         # Add a blank between each character. Divide time up accordingly
         length = len(led_list)
-        frame_interval = round(float(interval)/length, 2)
-        print ("Frame Interval: {}".format(frame_interval))
+        init_frame_interval = round(float(interval)/length, 2)
+        self.finterval = init_frame_interval
+        print ("Initial frame Interval: {}".format(init_frame_interval))
 
         # Start accelerometer thread
         self.stop_thread = False
         acl_thread = Thread(target=self.watch_accelerometer)
         acl_thread.start()
+        # self.START = True
 
         # Start/Stop LEDs based on accelerometer
         idx = 0
@@ -106,9 +180,8 @@ class AirtextShaker():
                 print ("Wait")
                 time.sleep(0.5)
             # Flash next frame
-            print ("Go: {}".format(idx))
-            LEDAPI.bb_led_on(led_list[idx])
-            time.sleep(frame_interval)
+            LEDAPI.bb_led_flash(led_list[idx])
+            time.sleep(self.finterval)
             idx += 1
             # Start back at beginning, but wait interval
             if idx >= length:
@@ -121,8 +194,16 @@ class AirtextShaker():
 # Start of execution
 ############################
 
+import sys
+
+string = "HELLO"
+time_interval = 3
+if len(sys.argv) > 2:
+    string = sys.argv[1]
+    time_interval = sys.argv[2]
+
 try:
     airs = AirtextShaker()
-    airs.start_airtext("hello", 15)
-except KeyboardInterrupt:
+    airs.start_airtext(string, time_interval)
+except (KeyboardInterrupt, Exception):
     airs.stop_current_thread()
